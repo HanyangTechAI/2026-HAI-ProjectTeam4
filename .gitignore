@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+source/*
+rawsource/*
+dataset/*
+generated.pt
+.claude/
+runs/
+output/
+OSUoutput/
+cursor_state.json
+pending_downloads.json

@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 import torch
 
 from model import EventChartTransformer
+from mp3toSpec import build_spectrogram, sanitize_filename
 from parser import ChartEvent, events_to_frame_labels, events_to_numpy
 
 
@@ -289,84 +291,112 @@ def dedup_events(events: List[ChartEvent]) -> List[ChartEvent]:
 # =========================================================
 # 3. 실행
 # =========================================================
-if __name__ == "__main__":
-    root = Path(__file__).resolve().parent.parent
+def _unique_stem(base: str, directory: Path) -> str:
+    """Return base if both output files are free, else base_1, base_2, ..."""
+    if not (directory / f"{base}-generated.txt").exists() and \
+       not (directory / f"{base}-generated_events.txt").exists():
+        return base
+    i = 1
+    while True:
+        candidate = f"{base}_{i}"
+        if not (directory / f"{candidate}-generated.txt").exists() and \
+           not (directory / f"{candidate}-generated_events.txt").exists():
+            return candidate
+        i += 1
 
-    # ── 모델 로드 ─────────────────────────────────────────
-    model = EventChartTransformer().to(device)
-    model.load_state_dict(
-        torch.load(root / "models" / "best.pt", map_location=device)
-    )
 
-    # ── Spec 로드 ──────────────────────────────────────────
-    spec_path = next((root / "source").rglob("spec.pt"))
-    print(f"used song : {spec_path}")
-    spec = torch.load(spec_path)
-    print(f"Spec shape: {spec.shape}")
-
-    # ── BPM 로드 ───────────────────────────────────────────
-    bpm_val = 120.0
-    meta_path = spec_path.parent / "metadata.json"
-    if meta_path.exists():
-        with open(meta_path) as f:
-            meta = json.load(f)
-        bpm_val = float(meta.get("BPM", 120) or 120)
-    bpm_norm = torch.tensor(
-        [(60000.0 / max(bpm_val, 60.0) / 50.0) / 20.0], dtype=torch.float
-    ).to(device)
-    print(f"BPM: {bpm_val:.1f}  (normalized: {bpm_norm.item():.3f})")
-
-    # ── 이벤트 생성 ────────────────────────────────────────
-    chart_events = generate_full_chart(model, spec, stride=256, bpm=bpm_norm, eos_threshold=0.8, hold_bias=2.0, top_k_delta=20)
-    print(f"Generated {len(chart_events)} events")
-
-    # ── 중복 (frame, lane) 제거 ───────────────────────────
-    chart_events = dedup_events(chart_events)
-    print(f"After dedup: {len(chart_events)} events")
-
-    # ── Hold 겹침 후처리 ───────────────────────────────────
-    chart_events = fix_hold_overlaps(chart_events)
-    print(f"After overlap fix: {len(chart_events)} events")
-
-    # ── 출력 폴더 및 파일명 결정 ───────────────────────────
-    from parser import sanitize_filename
-
-    output_dir = root / "output"
-    output_dir.mkdir(exist_ok=True)
-
-    song_name = sanitize_filename(spec_path.parent.name)
-
-    def _unique_stem(base: str, directory: Path) -> str:
-        """Return base if both output files are free, else base_1, base_2, ..."""
-        if not (directory / f"{base}-generated.txt").exists() and \
-           not (directory / f"{base}-generated_events.txt").exists():
-            return base
-        i = 1
-        while True:
-            candidate = f"{base}_{i}"
-            if not (directory / f"{candidate}-generated.txt").exists() and \
-               not (directory / f"{candidate}-generated_events.txt").exists():
-                return candidate
-            i += 1
-
+def _save_chart(
+    chart_events: List[ChartEvent],
+    song_name: str,
+    output_dir: Path,
+    num_frames: int,
+) -> None:
     stem = _unique_stem(song_name, output_dir)
     generated_txt_path    = output_dir / f"{stem}-generated.txt"
     generated_events_path = output_dir / f"{stem}-generated_events.txt"
 
-    # ── 프레임 행렬 → txt 저장 (시각화·재생용) ────────────
-    T = spec.shape[0]
-    frame_labels = events_to_frame_labels(chart_events, num_frames=T)
-    import numpy as _np
-    _np.savetxt(generated_txt_path, frame_labels, fmt="%d")
+    frame_labels = events_to_frame_labels(chart_events, num_frames=num_frames)
+    np.savetxt(generated_txt_path, frame_labels, fmt="%d")
 
-    # ── 이벤트 → txt 저장 (human-readable) ───────────────
     events_np = events_to_numpy(chart_events)
     _type_name = {0: "tap", 1: "hold"}
-    with open(generated_events_path, "w", encoding="utf-8") as _f:
-        _f.write("time_frame\tlane\ttype\tduration_frames\n")
-        for _row in events_np:
-            _t, _lane, _ntype, _dur = int(_row[0]), int(_row[1]), int(_row[2]), int(_row[3])
-            _f.write(f"{_t}\t{_lane}\t{_type_name.get(_ntype, str(_ntype))}\t{_dur}\n")
+    with open(generated_events_path, "w", encoding="utf-8") as f:
+        f.write("time_frame\tlane\ttype\tduration_frames\n")
+        for row in events_np:
+            t, lane, ntype, dur = int(row[0]), int(row[1]), int(row[2]), int(row[3])
+            f.write(f"{t}\t{lane}\t{_type_name.get(ntype, str(ntype))}\t{dur}\n")
 
-    print(f"Saved {generated_txt_path}    ({frame_labels.shape})")
-    print(f"Saved {generated_events_path}  ({events_np.shape})")
+    print(f"  Saved {generated_txt_path}  ({frame_labels.shape})")
+    print(f"  Saved {generated_events_path}  ({events_np.shape})")
+
+
+if __name__ == "__main__":
+    root = Path(__file__).resolve().parent.parent
+
+    # ── input 폴더 준비 ───────────────────────────────────
+    input_dir  = root / "input"
+    output_dir = root / "output"
+    input_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True)
+
+    mp3_files = sorted(input_dir.glob("*.mp3"))
+    if not mp3_files:
+        print(f"input/ 폴더에 MP3 파일이 없습니다: {input_dir}")
+        raise SystemExit(0)
+
+    print(f"Found {len(mp3_files)} MP3 file(s) in {input_dir}")
+
+    # ── 모델 로드 (한 번만) ───────────────────────────────
+    model = EventChartTransformer().to(device)
+    model.load_state_dict(
+        torch.load(root / "models" / "best.pt", map_location=device)
+    )
+    print("Model loaded.\n")
+
+    ok, skip = 0, 0
+
+    for mp3_path in mp3_files:
+        print(f"[{mp3_path.name}]")
+        try:
+            # ── 스펙트로그램 변환 ─────────────────────────
+            spec = build_spectrogram(mp3_path)
+            print(f"  Spec shape: {spec.shape}")
+
+            # ── BPM: 사이드카 JSON에서 읽기, 없으면 120 ──
+            bpm_val = 120.0
+            meta_path = mp3_path.with_suffix(".json")
+            if meta_path.exists():
+                with open(meta_path, encoding="utf-8") as f:
+                    meta = json.load(f)
+                bpm_val = float(meta.get("BPM", 120) or 120)
+            bpm_norm = torch.tensor(
+                [(60000.0 / max(bpm_val, 60.0) / 50.0) / 20.0], dtype=torch.float
+            ).to(device)
+            print(f"  BPM: {bpm_val:.1f}  (normalized: {bpm_norm.item():.3f})")
+
+            # ── 이벤트 생성 ───────────────────────────────
+            chart_events = generate_full_chart(
+                model, spec, stride=256, bpm=bpm_norm,
+                eos_threshold=0.8, hold_bias=2.0, top_k_delta=20,
+            )
+            print(f"  Generated {len(chart_events)} events")
+
+            chart_events = dedup_events(chart_events)
+            print(f"  After dedup: {len(chart_events)} events")
+
+            chart_events = fix_hold_overlaps(chart_events)
+            print(f"  After overlap fix: {len(chart_events)} events")
+
+            # ── 저장 ─────────────────────────────────────
+            song_name = sanitize_filename(mp3_path.stem)
+            _save_chart(chart_events, song_name, output_dir, num_frames=spec.shape[0])
+
+            ok += 1
+
+        except Exception as e:
+            print(f"  [SKIP] {e}")
+            skip += 1
+
+        print()
+
+    print(f"완료 — 성공: {ok}, 실패: {skip}")

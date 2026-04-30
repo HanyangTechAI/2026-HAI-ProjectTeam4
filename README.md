@@ -13,9 +13,11 @@ Project Name TBD, Team 4, Project(Model Implementation), 2026 HAI S1
     2. lstm, transfomer 모델로 데모 하나씩 만들어오고, 설명할수 있을만큼 공부해오기.
     3. parser.py output의 메타데이터에 beatmapsetID 추가.
     4. ogg대응
-
-
 - 04/02 TODO
     1. 너무 짦은 HOLD 고치기 (EX. 2->4)
     2. 잘못된 HOLD 처리 (EX. 2->3->3->2->3->4)
+이상의 TODO는 완료.
+
+- 04/30 회의
+    1. 
 

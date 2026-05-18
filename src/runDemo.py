@@ -50,6 +50,10 @@ def generate_window_events(
     hold_bias: float = 2.0,
     top_k_delta: int = 0,
     min_hold_dur: int = 5,
+    min_gap_per_lane: int = 3,
+    max_active_holds: int = 2,
+    hold_end_cooldown: int = 2,
+    snap_bpm: Optional[float] = None,
 ) -> List[List[int]]:
     """Generate delta-encoded events for one spec window.
 
@@ -85,6 +89,11 @@ def generate_window_events(
         current_frame = 0
         consecutive_delta0 = 0   # 현재 프레임에서 연속 delta=0 카운터
 
+        # 레인별 상태 (제약조건용)
+        last_note_frame:   dict = {0: -999, 1: -999, 2: -999, 3: -999}
+        hold_end_frame:    dict = {0: -999, 1: -999, 2: -999, 3: -999}
+        window_active_holds: dict = {}   # {lane: end_frame_in_window}
+
         for _ in range(max_events):
             N = tgt.shape[1]
             causal_mask = torch.triu(
@@ -104,11 +113,38 @@ def generate_window_events(
             if consecutive_delta0 >= 3:
                 delta_logits[0] = float('-inf')
 
+            # BPM 스냅: beat 단위 배수 delta만 허용 (snap_bpm 지정 시)
+            if snap_bpm is not None and snap_bpm > 0:
+                fpb = 60000.0 / snap_bpm / 50.0
+                valid_snaps = {0}
+                for divisor in (4.0, 2.0, 1.0, 0.5):
+                    v = round(fpb / divisor)
+                    for tol in (-1, 0, 1):
+                        d = v + tol
+                        if 0 < d <= MAX_DELTA:
+                            valid_snaps.add(d)
+                for d in range(MAX_DELTA + 1):
+                    if d not in valid_snaps:
+                        delta_logits[d] = float('-inf')
+
             # Suppress EOS until threshold fraction of window is covered
             if current_frame < T * eos_threshold:
                 type_logits[EOS_TYPE] = float('-inf')
 
             delta = _sample(delta_logits, temperature, top_k=top_k_delta)
+
+            # 같은 레인 cooldown: 최소 간격 및 hold 종료 후 쉬는 시간 적용
+            lane_logits = lane_logits.clone()
+            blocked = [
+                (current_frame - last_note_frame[li] < min_gap_per_lane or
+                 current_frame - hold_end_frame[li] < hold_end_cooldown)
+                for li in range(4)
+            ]
+            if not all(blocked):
+                for li, b in enumerate(blocked):
+                    if b:
+                        lane_logits[li] = float('-inf')
+
             lane  = _sample(lane_logits, temperature)
 
             # hold logit 억제: 훈련/추론 분포 차이 보정
@@ -116,6 +152,11 @@ def generate_window_events(
 
             # 이전 window에서 이 레인에 hold가 진행 중이면 중복 hold 완전 차단
             if active_holds and lane in active_holds:
+                type_logits[1] = float('-inf')
+
+            # 동시 active hold 수 제한
+            n_cur_holds = sum(1 for ef in window_active_holds.values() if ef > current_frame)
+            if n_cur_holds >= max_active_holds:
                 type_logits[1] = float('-inf')
 
             note_type = _sample(type_logits, temperature)
@@ -136,6 +177,12 @@ def generate_window_events(
                 consecutive_delta0 += 1
             else:
                 consecutive_delta0 = 0
+
+            # 레인별 상태 업데이트 (제약조건용)
+            last_note_frame[lane] = current_frame
+            if note_type == 1:
+                hold_end_frame[lane] = current_frame + dur
+                window_active_holds[lane] = current_frame + dur
 
             # 모델 피드백은 샘플링된 원본 dur 사용, 저장 시에만 tap dur=0
             save_dur = 0 if note_type != 1 else dur
@@ -164,6 +211,10 @@ def generate_full_chart(
     hold_bias: float = 2.0,
     top_k_delta: int = 0,
     min_hold_dur: int = 5,
+    min_gap_per_lane: int = 3,
+    max_active_holds: int = 2,
+    hold_end_cooldown: int = 2,
+    snap_bpm: Optional[float] = None,
 ) -> List[ChartEvent]:
     """Generate ChartEvent list for the full spectrogram.
 
@@ -202,6 +253,10 @@ def generate_full_chart(
             hold_bias=hold_bias,
             top_k_delta=top_k_delta,
             min_hold_dur=min_hold_dur,
+            min_gap_per_lane=min_gap_per_lane,
+            max_active_holds=max_active_holds,
+            hold_end_cooldown=hold_end_cooldown,
+            snap_bpm=snap_bpm,
         )
 
         # Convert delta → absolute, collect only up to collect_end
@@ -269,7 +324,46 @@ def fix_hold_overlaps(events: List[ChartEvent]) -> List[ChartEvent]:
 
 
 # =========================================================
-# 2-2. 같은 (frame, lane) 중복 제거
+# 2-2. Hold 구간 내 tap 제거
+# =========================================================
+def fix_tap_in_hold(events: List[ChartEvent]) -> List[ChartEvent]:
+    """hold 구간 내에 위치한 tap 이벤트를 제거한다.
+
+    fix_hold_overlaps() 이후에 호출 — hold 구간이 이미 병합된 상태를 전제로 함.
+    """
+    hold_intervals: dict = {0: [], 1: [], 2: [], 3: []}
+    for ev in events:
+        if ev.note_type == 1:
+            hold_intervals[ev.lane].append(
+                (ev.time_frame, ev.time_frame + ev.duration_frames)
+            )
+
+    result = []
+    for ev in events:
+        if ev.note_type == 0:
+            in_hold = any(s <= ev.time_frame <= e for s, e in hold_intervals[ev.lane])
+            if in_hold:
+                continue
+        result.append(ev)
+    return result
+
+
+# =========================================================
+# 2-3. 같은 레인 최소 간격 강제
+# =========================================================
+def enforce_min_gap(events: List[ChartEvent], min_gap: int = 3) -> List[ChartEvent]:
+    """같은 레인에서 min_gap 미만 간격의 노트를 제거한다."""
+    last_frame: dict = {0: -999, 1: -999, 2: -999, 3: -999}
+    result = []
+    for ev in sorted(events, key=lambda e: (e.time_frame, e.lane)):
+        if ev.time_frame - last_frame[ev.lane] >= min_gap:
+            result.append(ev)
+            last_frame[ev.lane] = ev.time_frame
+    return result
+
+
+# =========================================================
+# 2-4. 같은 (frame, lane) 중복 제거
 # =========================================================
 def dedup_events(events: List[ChartEvent]) -> List[ChartEvent]:
     """같은 (time_frame, lane) 위치에 중복된 이벤트를 하나로 줄인다.
@@ -386,6 +480,12 @@ if __name__ == "__main__":
 
             chart_events = fix_hold_overlaps(chart_events)
             print(f"  After overlap fix: {len(chart_events)} events")
+
+            chart_events = fix_tap_in_hold(chart_events)
+            print(f"  After tap-in-hold fix: {len(chart_events)} events")
+
+            chart_events = enforce_min_gap(chart_events, min_gap=3)
+            print(f"  After min-gap enforce: {len(chart_events)} events")
 
             # ── 저장 ─────────────────────────────────────
             song_name = sanitize_filename(mp3_path.stem)

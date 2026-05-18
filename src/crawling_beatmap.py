@@ -59,7 +59,7 @@ def _remove_pending(bmset_id: int) -> None:
         _write_pending(ids)
 
 # ──────────────────────────────────────────────────────────
-osu_session_value = "eyJpdiI6IkxkdDlSOHRLT2FrTU5POStRUGVZcUE9PSIsInZhbHVlIjoiYmx2YmM0dGxFMVlyRVVtdmFaMEtQTXdTM0xYOXMreUV5L09TclIzKy9NaElCNXpidFlBckxYMVErWkExc0pEbGZYa1FBeXdLZktzeFUzRDl5YjlNeVZCbkF2WkJ1WkNXRnU3TVpvKzJlRTNDeHQzd3BrclorM2ZsRUhWUThGNFVFWDE4THZpQVQwY2FObm44VUQwbEtRPT0iLCJtYWMiOiI3YzYxMGZiYjE3ZjUwYjg3NGI3YTE3Zjc5NGMyZmFkNGI0MzdjZTUzM2M2YjZkOWZmODJmMzRjMWYzNmQ0YzA0IiwidGFnIjoiIn0%3D"
+osu_session_value = "eyJpdiI6Im8xUlNycW1remd5bjdscUoyK0lJSHc9PSIsInZhbHVlIjoiaTRLRlZVcWRJeFc2TzRQL0lPd3djMytKdmQ3MEd4emcvZ2FqZFR6Q3IrRXpuMnNTTU1aUTBKay9pMnYzS01UcDgxVENPd1dBcHFydVQ0WGJWM3NEN2xSRmRmT1VFSjErOVdjSU91dHFIV3RaSVdSSTVVMS9RdlRxZkQxQk5ZWXptc0k2cXBvNnIyaUFFN0ZVaTBmSWtRPT0iLCJtYWMiOiIxOTQyM2JlYjk3ZmNlNDY3YjhiMTc5OTJmMGVlZjFjYTg4YWY5ZWFkODQzYTYwNjNkNDBkNjg0MWVmY2YyOWY3IiwidGFnIjoiIn0%3D"
 
 def get_download(beatmapID: int):
     download_url = f"https://osu.ppy.sh/beatmapsets/{beatmapID}/download"

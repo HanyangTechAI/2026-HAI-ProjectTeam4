@@ -57,7 +57,7 @@ def build_dataset(root: Path) -> None:
         bpm_val = 120.0
         meta_path = song_dir / "metadata.json"
         if meta_path.exists():
-            with open(meta_path) as f:
+            with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
             bpm_val = float(meta.get("BPM", 120) or 120)
         bpm_tensor = torch.tensor(bpm_val, dtype=torch.float)
@@ -233,7 +233,7 @@ def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor) -> torch.
 # =========================================================
 # 4. 학습
 # =========================================================
-def train(root: Path, epochs: int = 300, batch_size: int = 32) -> None:
+def train(root: Path, epochs: int = 120, batch_size: int =64) -> None:
     dataset = EventRhythmDataset(root / "dataset")
     loader  = DataLoader(
         dataset,

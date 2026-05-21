@@ -198,7 +198,8 @@ def _to_delta(events: torch.Tensor) -> torch.Tensor:
 # =========================================================
 # 3. Loss
 # =========================================================
-def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor,
+                 lane_reg_weight: float = 0.5) -> torch.Tensor:
     """Compute cross-entropy loss over 4 event fields, ignoring padding positions.
 
     pred       : tuple (delta_logits, lane_logits, type_logits, dur_logits)
@@ -215,7 +216,15 @@ def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor) -> torch.
     dur_t   = events[:, :, 3].clamp(0, MAX_DURATION).reshape(-1)[flat_mask]
 
     loss_delta = F.cross_entropy(delta_logits.reshape(-1, MAX_DELTA + 1)[flat_mask], delta_t)
-    loss_lane  = F.cross_entropy(lane_logits.reshape(-1, 4)[flat_mask], lane_t)
+
+    valid_lane_logits = lane_logits.reshape(-1, 4)[flat_mask]
+    loss_lane = F.cross_entropy(valid_lane_logits, lane_t)
+
+    lane_probs      = F.softmax(valid_lane_logits, dim=-1)
+    mean_lane_probs = lane_probs.mean(dim=0)
+    uniform_target  = torch.full_like(mean_lane_probs, 0.25)
+    loss_lane_reg   = -(uniform_target * torch.log(mean_lane_probs + 1e-8)).sum()
+
     loss_type  = F.cross_entropy(type_logits.reshape(-1, EOS_TYPE + 1)[flat_mask], type_t)
 
     hold_mask = (events[:, :, 2] == 1).reshape(-1)[flat_mask]
@@ -227,7 +236,7 @@ def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor) -> torch.
     else:
         loss_dur = delta_logits.new_tensor(0.0)
 
-    return loss_delta + loss_lane + loss_type + 0.5 * loss_dur
+    return loss_delta + loss_lane + loss_type + 0.5 * loss_dur + lane_reg_weight * loss_lane_reg
 
 
 # =========================================================

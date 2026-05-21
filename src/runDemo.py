@@ -8,6 +8,7 @@ import torch
 from model import EventChartTransformer
 from mp3toSpec import build_spectrogram, sanitize_filename
 from parser import ChartEvent, events_to_frame_labels, events_to_numpy
+from toOsu import events_txt_to_osu
 
 
 # =========================================================
@@ -57,6 +58,7 @@ def generate_window_events(
     max_chord_size: int = 2,
     lane_bias_window: int = 8,
     lane_bias_max_ratio: float = 0.6,
+    cross_lane_gap: int = 2,
 ) -> List[List[int]]:
     """Generate delta-encoded events for one spec window.
 
@@ -115,6 +117,10 @@ def generate_window_events(
             # 그 이상이면 delta=0 차단해서 runaway loop 방지
             if consecutive_delta0 >= max(max_chord_size - 1, 0):
                 delta_logits[0] = float('-inf')
+
+            # 전체 레인 통합 최소 간격: delta=0(코드)은 허용, 1~cross_lane_gap-1 차단
+            if cross_lane_gap > 1:
+                delta_logits[1:cross_lane_gap] = float('-inf')
 
             # BPM 스냅: beat 단위 배수 delta만 허용 (snap_bpm 지정 시)
             if snap_bpm is not None and snap_bpm > 0:
@@ -227,6 +233,7 @@ def generate_full_chart(
     max_chord_size: int = 2,
     lane_bias_window: int = 8,
     lane_bias_max_ratio: float = 0.6,
+    cross_lane_gap: int = 2,
 ) -> List[ChartEvent]:
     """Generate ChartEvent list for the full spectrogram.
 
@@ -248,7 +255,9 @@ def generate_full_chart(
 
     for start in range(0, T, _stride):
         end         = min(start + window, T)   # 인코더 입력 범위
-        collect_end = min(start + _stride, T)  # 이벤트 수집 상한
+        # 첫 윈도우는 prime_event가 없어 모델이 큰 delta를 생성하는 경향이 있어
+        # stride 대신 window 전체를 수집해 0~stride 구간 공백을 방지한다
+        collect_end = min(start + (window if start == 0 else _stride), T)
 
         spec_chunk = spec[start:end]
 
@@ -272,6 +281,7 @@ def generate_full_chart(
             max_chord_size=max_chord_size,
             lane_bias_window=lane_bias_window,
             lane_bias_max_ratio=lane_bias_max_ratio,
+            cross_lane_gap=cross_lane_gap,
         )
 
         # Convert delta → absolute, collect only up to collect_end
@@ -438,6 +448,9 @@ def _save_chart(
     print(f"  Saved {generated_txt_path}  ({frame_labels.shape})")
     print(f"  Saved {generated_events_path}  ({events_np.shape})")
 
+    osu_path = events_txt_to_osu(generated_events_path)
+    print(f"  Saved {osu_path}")
+
 
 if __name__ == "__main__":
     root = Path(__file__).resolve().parent.parent
@@ -487,6 +500,8 @@ if __name__ == "__main__":
             chart_events = generate_full_chart(
                 model, spec, stride=256, bpm=bpm_norm,
                 eos_threshold=0.8, hold_bias=2.0, top_k_delta=20,
+                snap_bpm=bpm_val,
+                cross_lane_gap=4,
             )
             print(f"  Generated {len(chart_events)} events")
 

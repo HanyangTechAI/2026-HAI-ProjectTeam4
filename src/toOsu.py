@@ -7,7 +7,6 @@ from parser import sanitize_filename
 
 HOP_MS = 50
 
-
 def _unique_path(directory: Path, stem: str, suffix: str) -> Path:
     candidate = directory / f"{stem}{suffix}"
     if not candidate.exists():

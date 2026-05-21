@@ -49,11 +49,14 @@ def generate_window_events(
     active_holds: Optional[dict] = None,
     hold_bias: float = 2.0,
     top_k_delta: int = 0,
-    min_hold_dur: int = 5,
+    min_hold_dur: int = 10,
     min_gap_per_lane: int = 3,
     max_active_holds: int = 2,
     hold_end_cooldown: int = 2,
     snap_bpm: Optional[float] = None,
+    max_chord_size: int = 2,
+    lane_bias_window: int = 8,
+    lane_bias_max_ratio: float = 0.6,
 ) -> List[List[int]]:
     """Generate delta-encoded events for one spec window.
 
@@ -110,7 +113,7 @@ def generate_window_events(
 
             # 4-key 게임에서 한 프레임에 최대 4개 노트 → delta=0은 최대 3번 연속
             # 그 이상이면 delta=0 차단해서 runaway loop 방지
-            if consecutive_delta0 >= 3:
+            if consecutive_delta0 >= max(max_chord_size - 1, 0):
                 delta_logits[0] = float('-inf')
 
             # BPM 스냅: beat 단위 배수 delta만 허용 (snap_bpm 지정 시)
@@ -145,6 +148,12 @@ def generate_window_events(
                     if b:
                         lane_logits[li] = float('-inf')
 
+            if len(generated) >= lane_bias_window:
+                recent_lanes = [e[1] for e in generated[-lane_bias_window:]]
+                for li in range(4):
+                    if recent_lanes.count(li) / lane_bias_window >= lane_bias_max_ratio:
+                        lane_logits[li] = float('-inf')
+
             lane  = _sample(lane_logits, temperature)
 
             # hold logit 억제: 훈련/추론 분포 차이 보정
@@ -160,10 +169,10 @@ def generate_window_events(
                 type_logits[1] = float('-inf')
 
             note_type = _sample(type_logits, temperature)
-            if note_type == 1 and min_hold_dur > 0:
-                dur_logits = dur_logits.clone()
-                dur_logits[:min_hold_dur] = float('-inf')
             dur = _sample(dur_logits, temperature)
+            if note_type == 1 and min_hold_dur > 0 and dur < min_hold_dur:
+                note_type = 0
+                dur = 0
 
             if note_type == EOS_TYPE:
                 break
@@ -210,11 +219,14 @@ def generate_full_chart(
     eos_threshold: float = 0.8,
     hold_bias: float = 2.0,
     top_k_delta: int = 0,
-    min_hold_dur: int = 5,
+    min_hold_dur: int = 10,
     min_gap_per_lane: int = 3,
     max_active_holds: int = 2,
     hold_end_cooldown: int = 2,
     snap_bpm: Optional[float] = None,
+    max_chord_size: int = 2,
+    lane_bias_window: int = 8,
+    lane_bias_max_ratio: float = 0.6,
 ) -> List[ChartEvent]:
     """Generate ChartEvent list for the full spectrogram.
 
@@ -257,6 +269,9 @@ def generate_full_chart(
             max_active_holds=max_active_holds,
             hold_end_cooldown=hold_end_cooldown,
             snap_bpm=snap_bpm,
+            max_chord_size=max_chord_size,
+            lane_bias_window=lane_bias_window,
+            lane_bias_max_ratio=lane_bias_max_ratio,
         )
 
         # Convert delta → absolute, collect only up to collect_end

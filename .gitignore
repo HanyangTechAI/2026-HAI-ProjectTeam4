@@ -7,6 +7,8 @@ dataset/*
 generated.pt
 .claude/
 runs/
+models/
+model1.0/
 output/
 OSUoutput/
 cursor_state.json

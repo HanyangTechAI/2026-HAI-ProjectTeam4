@@ -48,9 +48,9 @@ def generate_window_events(
     prime_event: Optional[List[int]] = None,
     eos_threshold: float = 0.8,
     active_holds: Optional[dict] = None,
-    hold_bias: float = 2.0,
+    hold_bias: float = 1.3,
     top_k_delta: int = 0,
-    min_hold_dur: int = 10,
+    min_hold_dur: int = 3,
     min_gap_per_lane: int = 3,
     max_active_holds: int = 2,
     hold_end_cooldown: int = 2,
@@ -223,9 +223,9 @@ def generate_full_chart(
     temperature: float = 1.0,
     bpm: Optional[torch.Tensor] = None,
     eos_threshold: float = 0.8,
-    hold_bias: float = 2.0,
+    hold_bias: float = 1.3,
     top_k_delta: int = 0,
-    min_hold_dur: int = 10,
+    min_hold_dur: int = 3,
     min_gap_per_lane: int = 3,
     max_active_holds: int = 2,
     hold_end_cooldown: int = 2,
@@ -499,7 +499,7 @@ if __name__ == "__main__":
             # ── 이벤트 생성 ───────────────────────────────
             chart_events = generate_full_chart(
                 model, spec, stride=256, bpm=bpm_norm,
-                eos_threshold=0.8, hold_bias=2.0, top_k_delta=20,
+                eos_threshold=0.8, hold_bias=1.3, top_k_delta=20,
                 snap_bpm=bpm_val,
                 cross_lane_gap=4,
             )

@@ -242,7 +242,7 @@ def compute_loss(pred, events: torch.Tensor, valid_mask: torch.Tensor,
 # =========================================================
 # 4. 학습
 # =========================================================
-def train(root: Path, epochs: int = 120, batch_size: int =64) -> None:
+def train(root: Path, epochs: int = 200, batch_size: int =64) -> None:
     dataset = EventRhythmDataset(root / "dataset")
     loader  = DataLoader(
         dataset,
@@ -312,6 +312,11 @@ def train(root: Path, epochs: int = 120, batch_size: int =64) -> None:
 # =========================================================
 if __name__ == "__main__":
     root = Path(__file__).resolve().parent.parent
+    dataset_root = root / "dataset"
 
-    build_dataset(root)
+    if not dataset_root.exists() or not any(dataset_root.iterdir()):
+        build_dataset(root)
+    else:
+        print(f"Dataset folder exists ({sum(1 for _ in dataset_root.iterdir())} samples), skipping build.")
+
     train(root)

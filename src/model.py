@@ -51,7 +51,7 @@ class EventChartTransformer(nn.Module):
     MAX_DURATION = 128   # max hold duration in frames  (128 * 50ms = 6.4s)
     EOS_TYPE     = 2     # note_type value used as end-of-sequence signal
 
-    def __init__(self, n_mels: int = 128, d_model: int = 256):
+    def __init__(self, n_mels: int = 128, d_model: int = 512):
         super().__init__()
         self.d_model = d_model
 
@@ -60,9 +60,9 @@ class EventChartTransformer(nn.Module):
 
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=8, batch_first=True,
-            dim_feedforward=1024, dropout=0.1
+            dim_feedforward=2048, dropout=0.1
         )
-        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=4)
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=6)
 
         # ── Event field embeddings ────────────────────────────
         # delta: 0 … MAX_DELTA  (MAX_DELTA+1 values)
@@ -79,9 +79,9 @@ class EventChartTransformer(nn.Module):
         # ── Decoder ──────────────────────────────────────────
         dec_layer = nn.TransformerDecoderLayer(
             d_model=d_model, nhead=8, batch_first=True,
-            dim_feedforward=1024, dropout=0.1
+            dim_feedforward=2048, dropout=0.1
         )
-        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=4)
+        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=6)
 
         # ── Output heads ─────────────────────────────────────
         self.fc_delta = nn.Linear(d_model, self.MAX_DELTA + 1)
@@ -95,7 +95,9 @@ class EventChartTransformer(nn.Module):
 
     def encode_spec(self, audio: torch.Tensor, bpm: torch.Tensor = None) -> torch.Tensor:
         """audio: (B, T, n_mels), bpm: (B,) normalized frames_per_beat → memory: (B, T, d_model)"""
-        B, T, _ = audio.shape
+        B, T, n_mels = audio.shape
+        freq_weight = torch.linspace(1.0, 2.0, n_mels, device=audio.device)
+        audio = audio * freq_weight
         x = self.audio_proj(audio)
         x = x + sinusoidal_pe(T, self.d_model, audio.device).unsqueeze(0)
         memory = self.encoder(x)

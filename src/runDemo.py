@@ -501,7 +501,7 @@ if __name__ == "__main__":
                 model, spec, stride=256, bpm=bpm_norm,
                 eos_threshold=0.8, hold_bias=1.3, top_k_delta=20,
                 snap_bpm=bpm_val,
-                cross_lane_gap=4,
+                cross_lane_gap=2,
             )
             print(f"  Generated {len(chart_events)} events")
 

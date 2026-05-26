@@ -94,7 +94,7 @@ def build_spectrogram(
     audio_path: Path,
     n_fft: int = 1024,
     n_mels: int = 128,
-    f_min: float = 0.0,
+    f_min: float = 27.5,
     f_max: Optional[float] = None,
 ) -> torch.Tensor:
 
